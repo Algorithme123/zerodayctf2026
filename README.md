@@ -1,3 +1,6 @@
+
+https://cursor.com/confirm-action#t=Z5bF4YrvlDL2snVfdoltGqwxDU2xs5-VDXnOxEHhdVM
+
 # ZeroDay CTF 2026 Write-ups
 
 This repository contains write-ups for the ZeroDay CTF 2026 challenges.
